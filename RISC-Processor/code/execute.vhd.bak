@@ -1,0 +1,120 @@
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity execute is
+	port(ra, rb, rp : in std_logic_vector(1 downto 0);
+        op1, op2, pipeline : in std_logic_vector(7 downto 0);
+        fa, fb : in std_logic;
+        old_flags : in std_logic_vector(3 downto 0);
+        mode : in std_logic_vector(5 downto 0);
+        in_condition : in std_logic_vector(1 downto 0);
+        sel_dst, cin, mem, wr, change_flag, get_flags : in std_logic;
+        fetch_reg_file : in std_logic_vector(7 downto 0);
+        get_from_fetch1, get_from_fetch2 : in std_logic;
+        result, addr: out std_logic_vector(7 downto 0);
+        rout : out std_logic_vector(1 downto 0);
+        out_condition : out std_logic_vector(1 downto 0);
+        out_flags: out std_logic_vector(3 downto 0);
+        mem_access, write_back: out std_logic
+
+    );
+end execute;
+
+architecture execute_arch of execute is
+
+    --+-----------+-----+--------+
+    --| alu_mode  | cin | F	     |
+    --+-----------+-----+--------+
+    --|		0        |  0  | A      |
+    --|		0        |  1  | A+1    |
+    --|		1        |  0  | A+B    |
+    --|		1        |  1  | A+B+1  |
+    --|		2        |  0  | A-B-1  |
+    --|		2        |  1  | A-B    |
+    --|		3        |  0  | A-1    |
+    --|		3        |  1  | NEG A  |
+    --+-----------+-----+--------+
+    --|		4        |  -  | A & B  |
+    --|		5        |  -  | A | B  |
+    --|		6        |  -  | A ^ B  |
+    --|		7        |  -  | NOT A  |
+    --+-----------+-----+--------+
+    --|		8        |  -  | LSR    |
+    --|		9        |  -  | RR     |
+    --|		10       |  -  | RRC    |
+    --|		11       |  -  | ASR    |
+    --+-----------+-----+--------+
+    --|		12       |  -  | LSL    | 
+    --|		13       |  -  | RL     |
+    --|		14       |  -  | RLC    |
+    --|		15       |  -  | ASL    |
+    --+-----------+-----+--------+
+
+	component Alu is  
+        generic (n : integer := 8);
+        port (a : in std_logic_vector (n-1 downto 0);
+            b : in std_logic_vector (n-1 downto 0);
+            old_flags : in std_logic_vector(3 downto 0);
+            alu_mode : in std_logic_vector(3 downto 0);
+            cin : in std_logic;
+            result : out std_logic_vector (n-1 downto 0);
+            alu_flags : out std_logic_vector(3 downto 0) );    
+	end component;
+
+    signal v1, v2 : std_logic_vector(7 downto 0);
+    signal sel1, sel2 : std_logic_vector(1 downto 0);
+    signal s1, s2 : std_logic;
+
+    signal alu_mode : std_logic_vector(3 downto 0);
+    signal alu_flags : std_logic_vector(3 downto 0);
+    signal alu_result : std_logic_vector(7 downto 0);
+begin
+
+    -- select alu mode
+    alu_mode <= mode(3 downto 0);
+
+    -- mem access
+    mem_access <= mem;
+
+    -- write back
+    write_back <= wr;
+
+    -- forward ra if in pipline
+    sel1 <= ra xor rp;
+    s1 <= sel1(1) or sel1(0);
+    v1 <= fetch_reg_file when get_from_fetch1 = '1' 
+    else op1 when (s1 = '1' or fa = '0') else pipeline;
+
+
+
+    -- forward rb if in pipline
+    sel2 <= rb xor rp;
+    s2 <= sel2(1) OR sel2(0);
+    v2 <= fetch_reg_file when get_from_fetch2 = '1' 
+    else op2 when (s2 = '1' or fb = '0') else pipeline;
+ 
+    -- get destination register
+    rout <= rb when (sel_dst = '1') else ra; 
+
+    -- get flags
+    out_flags <= old_flags when change_flag = '0'
+    else alu_result(3 downto 0) when mode = "110101" or mode = "110100"
+    else alu_flags;
+
+    -- alu
+   	u0: Alu generic map(8) port map(v1, v2, old_flags, alu_mode , cin, alu_result , alu_flags);
+
+    -- get result
+    result <= alu_result;
+
+    -- get address
+    -- addr <= v2 when in_condition = "01" or mode (5 downto 4) = "01"
+    addr <= v2 when mode (5 downto 4) = "01"
+    else alu_result when in_condition = "10"
+    else (others => '0');
+
+    out_condition <= in_condition;
+    
+--    stall <= get_from_fetch1 or get_from_fetch2;
+    
+end execute_arch;

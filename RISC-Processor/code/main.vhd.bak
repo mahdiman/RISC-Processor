@@ -1,0 +1,306 @@
+LIBRARY ieee;
+use ieee.std_logic_1164.all;
+use IEEE.math_real.all;
+use IEEE.NUMERIC_STD.all;
+
+entity main is
+	port(
+		clk, rst, int: in STD_LOGIC;
+		port_in: in std_logic_vector(7 downto 0);
+		port_out : out std_logic_vector(7 downto 0)
+	);
+end main;
+
+architecture main_arch OF main IS
+	
+	-- fetch component
+	component fetch is
+		generic (n: integer := 8;
+				i: integer := 8);
+		port(
+			clk, interrupt: in std_logic;
+			pc: in std_logic_vector(n-1 downto 0);
+			stall : in std_logic;
+			instIn : std_logic_vector(n-1 downto 0);
+			instruction: out std_logic_vector (i-1 downto 0);
+			pc_incremented : out std_logic_vector(n-1 downto 0);
+			ldOut, interrupt_address_en: out std_logic;
+			instOut, interrupt_address: out std_logic_vector(n-1 downto 0)
+		);
+	end component;
+	
+	-- decode component
+  	component decode is 
+		port(
+	 		instruction : in std_logic_vector(7 downto 0);
+			r0, r1, r2, r3, port_in, pc: in std_logic_vector(7 downto 0);
+			old_flags : in std_logic_vector(3 downto 0);
+			stallin : in std_logic;
+			mode: out std_logic_vector(5 downto 0);
+			br_mode : out std_logic_vector(3 downto 0);
+			op1, op2 : out std_logic_vector(7 downto 0);
+			ra, rb : out std_logic_vector(1 downto 0);
+			fa, fb, cin, mem_access, write_back, flag_change, sel_dst: out std_logic;
+			conditions : out std_logic_vector(1 downto 0);
+			get_from_fetch1, get_from_fetch2, stallout, get_flags, pc_read, pc_dirty, save_flags, restore_flags: out std_logic);
+	end component;
+	
+	component execute is
+		port(ra, rb, rp : in std_logic_vector(1 downto 0);
+	        op1, op2, pipeline, pc : in std_logic_vector(7 downto 0);
+	        fa, fb, pc_in, pc_dirty, is_pipe_dirty, save_flags, restore_flags : in std_logic;
+	        old_flags : in std_logic_vector(3 downto 0);
+	        mode : in std_logic_vector(5 downto 0);
+	        br_mode: in std_logic_vector(3 downto 0);
+	        in_condition : in std_logic_vector(1 downto 0);
+	        sel_dst, cin, mem, wr, change_flag, get_flags : in std_logic;
+	        fetch_reg_file : in std_logic_vector(7 downto 0);
+	        get_from_fetch1, get_from_fetch2 : in std_logic;
+	        result1, result2, addr: out std_logic_vector(7 downto 0);
+	        rout1, rout2 : out std_logic_vector(1 downto 0);
+	        out_condition : out std_logic_vector(1 downto 0);
+	        out_flags: out std_logic_vector(3 downto 0);
+	        mem_access, write_back, select_result, flush , pc_read, pipeline_dirty, save_flags_out, restore_flags_out: out std_logic);
+	end component;
+	
+	-- memory access component
+	component accessMem is
+		generic ( n : integer := 8);
+		PORT(memAccess, clk : in STD_LOGIC;
+			wbin, pc_in : in STD_LOGIC;
+			srcRegin : STD_LOGIC_VECTOR(1 downto 0);
+			execResult, memAddress : in STD_LOGIC_VECTOR(n-1 downto 0);
+			toWB : out STD_LOGIC_VECTOR(n-1 downto 0);
+			srcRegout : out STD_LOGIC_VECTOR(1 downto 0);
+			wbout, pc_read : out STD_LOGIC);
+	end component;
+		
+	component ndff is
+	    generic ( n : integer := 8);
+	    port( clk, rst, init_val, en, flush : in std_logic;
+	        d : in std_logic_vector(n-1 downto 0);
+	        q : out std_logic_vector(n-1 downto 0));
+	end component;
+
+	signal r0, r1, r2, r3, pc, pc_inc, pc_next, dec_op1, dec_op2, exc_op1, exc_op2 : std_logic_vector(7 downto 0);
+	signal b1, b1_pre : std_logic_vector(25 downto 0);
+	signal b2, b2_pre : std_logic_vector(45 downto 0);
+	signal b3, b3_pre : std_logic_vector(21 downto 0);
+	signal dec_mode, exc_mode : std_logic_vector(5 downto 0);
+	signal dec_br_mode, exc_br_mode: std_logic_vector(3 downto 0);	
+
+	-- execute signals
+	signal exc_ra, exc_rb, exc_conditions : std_logic_vector(1 downto 0);
+	signal exc_get_fetch1, exc_get_fetch2, exc_fa, exc_fb, exc_cin, exc_mem_access, exc_write_back, exc_flag_change, exc_sel_dst, exc_get_flags, flush, exc_flush, exc_pc_read: std_logic;
+	signal exc_saved_flags, exc_restore_flags: std_logic;
+
+	-- decode signals
+	signal dec_ra, dec_rb, dec_conditions : std_logic_vector(1 downto 0);
+	signal dec_fa, dec_fb, dec_cin, dec_mem_access, dec_write_back, dec_flag_change,
+	dec_get_fetch1, dec_get_fetch2, dec_sel_dst, dec_get_flags, dec_pc_read, dec_pc_dirty: std_logic;
+	signal dec_saved_flags, dec_restore_flags: std_logic;
+	
+	
+	signal rout1, rout2, rout : std_logic_vector(1 downto 0);
+	signal old_flags, out_flags, next_flags : std_logic_vector(3 downto 0);
+	signal stall, mem_access, write_back, select_result: std_logic;
+	signal result1, result2, result, addr : std_logic_vector(7 downto 0);
+
+	-- fetch signals
+	signal instruction, instOut, instIn : std_logic_vector(7 downto 0);
+	signal ldin, ldout, pc_dirty, is_pipe_dirty, pipeline_dirty : std_logic;
+
+	-- memory access with write back
+	signal mem_access_address, mem_access_result, mem_access_toWB : std_logic_vector(7 downto 0);
+	signal mem_access_en, mem_access_wbin, mem_access_wbout : std_logic;
+	signal mem_access_src_regin, mem_access_src_regout : std_logic_vector(1 downto 0);
+	signal r3_val, m1, mem_1 : std_logic_vector(7 downto 0);
+	signal mem_access_pc_read, m1en : std_logic;
+
+	-- general purpose registers' enables
+	signal en1, en2, en3, en4, notCLk : std_logic;
+	signal main_conditions : std_logic_vector(1 downto 0);
+
+	signal pc_read, wb_pc_read, save_flags, restore_flags : std_logic;
+	signal saved_flags : std_logic_vector(3 downto 0);
+begin
+
+	-- falling edge clock
+	notClk <= not clk;
+
+	-- get next pc
+	pc_next <= mem_1 when int = '1'
+	else mem_access_toWB when wb_pc_read = '1' 
+	else result2 when flush = '1' 
+	else pc_inc;
+
+	re0: ndff generic map(8) port map(clk, rst, '0', '1', '0', pc_next, pc);
+	
+	-- fetch component
+	u1: fetch generic map(8, 8) port map(clk, int, pc, ldin, instIn, instruction, pc_inc, ldout, m1en, instOut, m1);
+	mm1: ndff generic map(8) port map(clk, rst, '0', m1en, '0', m1, mem_1);
+
+	b1_pre <= (pc_inc & instOut & ldout & stall & instruction);
+
+	-- register between fetch & decode
+	re1: ndff generic map(26) port map(clk, rst, '0', '1', flush, b1_pre, b1);
+  	ldin <= b1(9);
+  	instIn <= b1(17 downto 10);
+	
+	-- decode component
+	u2: decode port map(
+	b1(7 downto 0), 
+	r0, 
+	r1, 
+	r2, 
+	r3, 
+	port_in, 
+	b1(25 downto 18),
+	old_flags,
+	b1(8), 
+	dec_mode, 
+	dec_br_mode,
+	dec_op1, 
+	dec_op2, 
+	dec_ra, 
+	dec_rb, 
+	dec_fa, 
+	dec_fb, 
+	dec_cin, 
+	dec_mem_access, 
+	dec_write_back, 
+	dec_flag_change, 
+	dec_sel_dst, 
+	dec_conditions,
+	dec_get_fetch1,
+	dec_get_fetch2,
+	stall,
+	dec_get_flags,
+	dec_pc_read,
+	dec_pc_dirty,
+	dec_saved_flags,
+	dec_restore_flags);
+	
+	b2_pre <= ( dec_saved_flags&dec_restore_flags&dec_pc_dirty&dec_pc_read&dec_br_mode&dec_get_flags&dec_get_fetch1 & dec_get_fetch2 & dec_conditions & dec_mode & dec_op1 & dec_op2 & dec_ra & dec_rb & dec_fa & dec_fb & dec_cin & dec_mem_access & dec_write_back & dec_flag_change & dec_sel_dst);
+
+	-- register between decode & execute
+	re2: ndff generic map(46) port map(clk, rst, '0', '1', flush, b2_pre, b2);
+	flush <= exc_flush or mem_access_pc_read;
+
+	-- prepare data from register between decode & execute to signals 
+	exc_saved_flags <= b2(45);
+	exc_restore_flags <= b2(44);
+	pc_dirty <= b2(43);
+	exc_pc_read <= b2(42);
+	exc_br_mode <= b2(41 downto 38);
+	exc_get_flags <= b2(37);
+	exc_get_fetch1 <= b2(36);
+	exc_get_fetch2 <= b2(35);
+	exc_conditions <= b2(34 downto 33);
+	exc_mode <= b2(32 downto 27);
+	exc_op1 <= b2(26 downto 19);
+	exc_op2 <= b2(18 downto 11);
+	exc_ra <= b2(10 downto 9);
+	exc_rb <= b2(8 downto 7);
+	exc_fa <= b2(6);
+	exc_fb <= b2(5);
+	exc_cin <= b2(4);
+	exc_mem_access <= b2(3);
+	exc_write_back <= b2(2);
+	exc_flag_change <= b2(1);
+	exc_sel_dst <= b2(0);
+
+	u3: execute port map(
+	exc_ra, 
+	exc_rb, 
+	mem_access_src_regIn, 
+	exc_op1, 
+	exc_op2, 
+	mem_access_result,
+	pc, 
+	exc_fa, 
+	exc_fb,
+	exc_pc_read,
+	pc_dirty,
+	is_pipe_dirty, 
+	exc_saved_flags,
+	exc_restore_flags,
+	old_flags, 
+	exc_mode, 
+	exc_br_mode,
+	exc_conditions, 
+	exc_sel_dst,
+	exc_cin, 
+	exc_mem_access, 
+	exc_write_back, 
+	exc_flag_change, 
+	exc_get_flags,
+	b1(7 downto 0),
+	exc_get_fetch1,
+	exc_get_fetch2,
+	result1, 
+	result2, 
+	addr, 
+	rout1, 
+	rout2, 
+	main_conditions, 
+	out_flags, 
+	mem_access, 
+	write_back,
+	select_result,
+	exc_flush,
+	pc_read,
+	pipeline_dirty,
+	save_flags,
+	restore_flags
+	);
+
+
+	-- set saved flags register
+	sr:  ndff generic map(4) port map(clk, rst, '0', '1', '0', out_flags, saved_flags);  
+
+	next_flags <= saved_flags when restore_flags = '1' 
+	else out_flags;
+
+	-- set flags register
+	fr:  ndff generic map(4) port map(clk, rst, '0', '1', '0', next_flags, old_flags);  
+
+	
+	-- adding execute stage output to the register file
+	result <= result1 when select_result = '0' else  result2;
+	rout <= rout1 when select_result = '0' else  rout2;
+
+	b3_pre <= (pipeline_dirty & pc_read & result & addr & rout & mem_access & write_back);
+	re3: ndff generic map(22) port map(clk, rst, '0', '1', mem_access_pc_read, b3_pre, b3); 
+	
+	is_pipe_dirty <= b3(21);
+	mem_access_pc_read <= b3(20);		
+	mem_access_result <= b3(19 downto 12);
+	mem_access_address <= b3(11 downto 4);
+	mem_access_src_regin <= b3(3 downto 2);
+	mem_access_en <= b3(1);
+	mem_access_wbin <= b3(0);
+	
+	-- memAccess - clk - Wbin - srcRegin - execResult - memAddress - toWB - srRegout- wbout
+	u4: accessmem port map(mem_access_en, clk, mem_access_wbin, mem_access_pc_read, mem_access_src_regin,
+				mem_access_result, mem_access_address, mem_access_toWB,
+				mem_access_src_regout, mem_access_wbout, wb_pc_read);
+	
+
+	en1 <= '1' when mem_access_src_regOut = "00" and mem_access_wbOut = '1' and wb_pc_read = '0' else '0';
+	en2 <= '1' when mem_access_src_regOut = "01" and mem_access_wbOut = '1' and wb_pc_read = '0' else '0';
+	en3 <= '1' when mem_access_src_regOut = "10" and mem_access_wbOut = '1' and wb_pc_read = '0' else '0';
+	en4 <= '1' when ( ( mem_access_src_regOut = "11" and mem_access_wbOut = '1' ) or main_conditions = "10" ) and wb_pc_read = '0' else '0';
+
+	re4: ndff generic map(8) port map(notClk, rst, '0', en1, '0', mem_access_toWB, r0);
+	re5: ndff generic map(8) port map(notClk, rst, '0', en2, '0', mem_access_toWB, r1);
+	re6: ndff generic map(8) port map(notClk, rst, '0', en3, '0', mem_access_toWB, r2);
+
+	r3_val <= result1 when main_conditions = "10" else mem_access_toWB; 
+	re7: ndff generic map(8) port map(notClk, rst, '1', en4, '0', r3_val, r3);
+
+	-- change out of write back stage
+	port_out <= result when main_conditions = "01"
+	else (others => '0');
+
+END main_arch;

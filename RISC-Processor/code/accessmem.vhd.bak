@@ -1,0 +1,70 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+USE IEEE.math_real.ALL;
+USE IEEE.NUMERIC_STD.ALL;
+
+-- ENTITY: memory access
+-- Description: Applies the memory access stage of the pipelined processor
+-- SIGNALS:
+-- 1- memAccess : 1 When a load or store instruction is executed, 0 otherwise
+-- 2- clk: clock needed by the data ram
+-- 3- wbIn: writeback enable (0=>don't write to registers in next stage, 1=>write to registers in next stage)
+-- 4- srcRegIn: source register index
+-- 5- execResult: value  to be stored in registers, memory or being ignored
+-- 7- toWB: value to be written to registers in writeback stage.
+-- 8- srcOutReg: register to be written to
+-- 9- wbOut: writeback stage enable
+
+
+ENTITY accessMem IS
+  GENERIC ( n : integer := 8);
+  PORT(memAccess, clk : IN STD_LOGIC;
+	wbIn, pc_in : IN STD_LOGIC;
+	srcRegIn : STD_LOGIC_VECTOR(1 DOWNTO 0);
+	execResult, memAddress : IN STD_LOGIC_VECTOR(n-1 DOWNTO 0);
+	toWB : OUT STD_LOGIC_VECTOR(n-1 DOWNTO 0);
+	srcRegOut : OUT STD_LOGIC_VECTOR(1 DOWNTO 0);
+	wbOut, pc_read : OUT STD_LOGIC
+);
+END accessMem;
+
+ARCHITECTURE accessMem_arch OF accessMem IS
+
+
+-- ram component
+COMPONENT ram IS
+ GENERIC ( n : integer := 8;
+           m : integer := 256);
+  
+ PORT (clk, we : IN STD_LOGIC;
+ 	address : IN STD_LOGIC_VECTOR(n-1 downto 0);
+	datain : IN STD_LOGIC_VECTOR(n-1 DOWNTO 0);
+	dataout : OUT STD_LOGIC_VECTOR(n-1 DOWNTO 0));
+          
+END COMPONENT;
+
+
+SIGNAL memWrite : STD_LOGIC;
+SIGNAL memOut: STD_LOGIC_VECTOR(n-1 DOWNTO 0);
+
+BEGIN
+
+-- read from memory and write to registers when both memAcces and wbIn are 1 (load instruction)
+-- write to memory when just memAccess is 1 (store instruction)
+memWrite <= '1' WHEN memAccess <= '1' AND wbIn = '0' and pc_in = '0'
+ELSE '0';
+
+m0: ram GENERIC MAP (n, 256) PORT MAP (clk, memWrite, memAddress, execResult, memOut); 
+
+srcRegOut <= srcRegIn;
+wbOut <= wbIn;
+
+-- value to be written to registers
+-- 1- value fetched from ram in case of load instruction
+-- 2- just the value we have got from the execution unit
+toWb <= memOut WHEN memAccess = '1' AND wbIn = '1'
+ELSE execResult;
+
+pc_read <= pc_in;
+
+END accessMem_arch;

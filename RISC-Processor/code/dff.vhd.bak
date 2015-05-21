@@ -1,0 +1,28 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+
+-- Entity dff
+-- Represents a single bit D-FlipFlop
+-- d: input value to be stored
+-- clk: clock
+-- rst: reset
+-- E: enable
+-- output: output bit
+
+ENTITY dff IS
+
+  PORT( d,clk,rst,E : IN STD_LOGIC;
+  output : OUT STD_LOGIC);
+
+END dff;
+
+-- Architecture: dff_arch
+-- Describes the functionality of the D-FlipFlop
+
+ARCHITECTURE dff_arch OF dff IS
+BEGIN
+ -- D-FlipFlop logic
+ output <= '0' WHEN rst = '1'
+ ELSE d WHEN clk = '0' AND E = '1';
+
+END dff_arch;
